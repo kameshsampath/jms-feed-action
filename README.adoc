@@ -1,0 +1,93 @@
+= Feed Action
+
+This feed action is responsible for creating the JMS Feed listener and associating it with a Trigger
+
+[[pre-req]]
+= Pre-requisite
+
+* Deploy https://activemq.apache.org/artemis to OpenShift using https://github.com/kameshsampath/jms-feed-provider/artemis/artemis.yml
+* Deploy https://github.com/kameshsampath/openwhisk-openshift#installing-on-minishift[OpenWhisk on Minishift]
+
+[IMPORTANT]
+====
+* For all the CLI commands to work as it is, deploy OpenWhisk to a OpenShift Project
+called `openwhisk`
+* Deploy applications artemis and jms-feed-provider to `myproject` workspace
+* make user `developer` as admin for both these projects via
+[code,sh]
+----
+ oc adm policy add-role-to-user admin developer -n openwhisk
+----
+====
+
+== Build and Deploy
+
+[[create-package]]
+=== Create Package
+
+[code,sh]
+----
+wsk -i package create --shared yes redhatdevelopers <1>
+----
+
+<1> this could be anything, if you change it please update link:./pom.xml[pom.xml] `openwhisk.package`
+property
+
+[[create-feed-action]]
+=== Create Feed Action
+[code,sh]
+----
+mvn clean package <1>
+wsk -i action update -a feed true redhatdevelopers/jms-feed \
+ target/jms-feed-action.jar --main org.workspace7.openwhisk.JmsFeedAction
+----
+<1> if you have https://github.com/apache/incubator-openwhisk-cli[WSK CLI] installed, post package
+
+
+[[create-trigger]]
+=== Create Trigger
+
+==== Pre-requisite
+
+You will need to deploy the https://github.com/kameshsampath/jms-feed-provider[JMS Feed Provider] before creating the trigger.
+Refer to the https://github.com/kameshsampath/jms-feed-provider/README.adoc[README] on the deployment.
+
+==== Create Trigger, Action and Rule
+
+[code,sh]
+----
+wsk -i trigger create jmsTrigger --feed redhatdevelopers/jms-feed \
+		-p destinationName demo_queue <1>
+
+wsk action create jmsTriggerAction src/handler.js <4>
+wsk rule create jmsEntryRule jmsTrigger jmsTriggerAction <5>
+----
+
+<1> If you deployed Artemis using method referenced in <<pre-req>>, then the default artemis client name would be
+is **artemis-client** and by default this is accessible only from within OpenShift cluster.  We make this trigger
+to have Event Source only from the JMS Destination `demo_queue`
+<4> Create a dummy action just to see what parameters are sent via the event source
+<5> Associate the Trigger with Action via a rule
+
+[TIP]
+====
+* Whenever you delete and recreate trigger, you need to enable the rule via
+  `wsk -i rule enable cacheEntryRule`.  As deleting trigger will disable any
+  active rules associated with it
+====
+
+=== Testing Application
+
+https://github.com/kameshsampath/jms-feed-provider[Infinispan Feed Provider] provides
+a REST path called `/data/add/{destinationName}` which can be used to add dummy entry to see
+the cache entry event triggering the **jmsTriggerAction**
+
+[code,sh]
+----
+curl -X GET  --data "hello world"  $(minishift openshift service jms-feed-provider -n myproject --url)/data/add/demo_queue <1>
+wsk activation list -limit 1 jmsTriggerAction <2>
+wsk activation result <activation-id> <3>
+----
+<1> Send a message to JMS Destination `demo_queue`
+<2> Check if the jmsTriggerAction action is triggered as a result of cache entry addition
+<3> Check what payload the jmsTriggerAction  has recevied
